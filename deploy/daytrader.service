@@ -1,0 +1,31 @@
+# systemd unit for the daytrader-bot scheduler (the recommended deployment).
+#
+# Install:
+#   sudo cp deploy/daytrader.service /etc/systemd/system/daytrader.service
+#   # edit User/WorkingDirectory/paths below to match your install
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now daytrader.service
+#   journalctl -u daytrader -f          # follow logs
+
+[Unit]
+Description=daytrader-bot intraday trading service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trader
+Group=trader
+WorkingDirectory=/opt/daytrader-bot
+# Use the project's virtualenv interpreter.
+ExecStart=/opt/daytrader-bot/.venv/bin/python /opt/daytrader-bot/main.py
+Restart=on-failure
+RestartSec=10
+# Load secrets from the .env (systemd reads KEY=VALUE lines).
+EnvironmentFile=-/opt/daytrader-bot/.env
+# Hardening.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,89 @@
+# ════════════════════════════════════════════════════════════
+#  daytrader-bot runtime configuration (non-secret).
+#  Secrets live in .env. This file is validated at startup by
+#  daytrader.config.settings — a bad value fails loudly on boot.
+# ════════════════════════════════════════════════════════════
+
+app:
+  simulation_mode: true            # MASTER TOGGLE. true = VirtualBroker, no real capital.
+  timezone: "America/New_York"
+  log_level: "INFO"                # DEBUG | INFO | WARNING | ERROR
+  db_path: "data/trading.db"
+
+# ── Data & Research (Modules 1 & 2) ──
+data:
+  provider: "alpaca"               # alpaca (default). Abstraction allows others later.
+  feed: "iex"                      # iex (free) | sip (paid). Alpaca market-data feed.
+  timeframes: ["1m", "5m", "15m", "1d"]
+  poll_interval_seconds: 60
+
+research:
+  universe: ["sp500"]              # sp500 | nasdaq100 | a custom explicit symbol list
+  max_watchlist_size: 15
+  filters:
+    min_avg_daily_volume: 1000000  # liquidity floor (shares)
+    min_price: 5.0
+    max_price: 1000.0
+    min_gap_percent: 2.0           # |gap| threshold to qualify
+    min_relative_volume: 1.5       # RVOL threshold
+  sentiment:
+    enabled: true
+    provider: "finnhub"            # finnhub | newsapi | none
+    lookback_hours: 12
+    min_articles: 3
+
+indicators:
+  ema_periods: [9, 21, 50, 200]
+  rsi_period: 14
+  atr_period: 14
+  macd:
+    fast: 12
+    slow: 26
+    signal: 9
+
+# ── Strategies (Module 3) — toggle switches ──
+strategies:
+  vwap_pullback:
+    enabled: true
+    trend_ema: 21
+    max_distance_from_vwap_atr: 0.5
+  opening_range_breakout:
+    enabled: true
+    opening_range_minutes: 15
+    volume_confirmation: true
+  momentum_scalp:
+    enabled: false
+    fast_ema: 9
+    slow_ema: 21
+    min_relative_volume: 2.0
+
+# ── Risk & Execution (Module 4) ──
+risk:
+  starting_equity: 100000.0        # virtual account seed (sim mode)
+  max_risk_per_trade_pct: 1.0
+  max_daily_drawdown_pct: 3.0      # KILL SWITCH threshold
+  max_open_positions: 5
+  max_position_size_pct: 20.0
+  stop_loss:
+    method: "atr"                  # atr | structural
+    atr_multiplier: 2.0
+  take_profit:
+    method: "trailing"             # trailing | fixed
+    risk_reward_ratio: 2.0
+    trailing_atr_multiplier: 1.5
+  slippage_pct: 0.05               # +0.05% applied to sim fills
+  commission_per_trade: 0.0
+
+# ── Schedule (orchestrator) — times in app.timezone ──
+schedule:
+  premarket_research: "07:00"
+  market_open: "09:30"
+  market_close: "16:00"
+  report_time: "16:15"
+
+# ── Reporting (Module 6) ──
+reporting:
+  output_dir: "data/reports"
+  chart_timeframe: "5m"
+  send_email: true
+  attach_individual_charts: true

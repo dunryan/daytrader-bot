@@ -1,0 +1,25 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Runtime artifacts
+data/*.db
+data/reports/*
+logs/*
+
+# Keep folder placeholders
+!data/reports/.gitkeep
+!logs/.gitkeep
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
