@@ -122,6 +122,7 @@ class SignalRepository:
         confidence: float | None = None,
         rationale: str | None = None,
         indicators: dict[str, Any] | None = None,
+        meta_prob: float | None = None,
     ) -> int:
         """Persist a single signal; returns its row id."""
         with self.db.session() as s:
@@ -134,6 +135,7 @@ class SignalRepository:
                 confidence=confidence,
                 rationale=rationale,
                 indicators_json=json.dumps(indicators or {}, default=str),
+                meta_prob=meta_prob,
             )
             s.add(row)
             s.flush()
@@ -257,6 +259,30 @@ class PositionRepository:
                 Position.trade_date == trade_date, Position.status == "CLOSED"
             )
             return list(s.scalars(stmt).all())
+
+    def get_closed_for_strategy(self, strategy: str, limit: int = 200) -> list[Position]:
+        """Most recent closed round-trips for one strategy (Kelly statistics)."""
+        with self.db.session() as s:
+            stmt = (
+                select(Position)
+                .where(Position.strategy == strategy, Position.status == "CLOSED")
+                .order_by(Position.exit_time.desc())
+                .limit(limit)
+            )
+            return list(s.scalars(stmt).all())
+
+    def get_recent_closed(self, limit: int = 200) -> list[Position]:
+        """Most recent closed round-trips across all strategies (PF gate)."""
+        with self.db.session() as s:
+            stmt = (
+                select(Position)
+                .where(Position.status == "CLOSED")
+                .order_by(Position.exit_time.desc())
+                .limit(limit)
+            )
+            rows = list(s.scalars(stmt).all())
+        rows.reverse()
+        return rows
 
 
 class DailyMetricsRepository:

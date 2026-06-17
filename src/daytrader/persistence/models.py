@@ -81,6 +81,8 @@ class Signal(Base):
     confidence: Mapped[float | None] = mapped_column(Float)
     rationale: Mapped[str | None] = mapped_column(Text)
     indicators_json: Mapped[str | None] = mapped_column(Text)
+    # Meta-label model's predicted probability of profitability (if scored).
+    meta_prob: Mapped[float | None] = mapped_column(Float)
     acted_on: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_utcnow)
 
@@ -148,6 +150,12 @@ class Position(Base):
     entry_time: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
     stop_loss: Mapped[float | None] = mapped_column(Float)
     take_profit: Mapped[float | None] = mapped_column(Float)
+    # ATR at entry time: the trailing-stop distance must be derived from the
+    # volatility observed at entry, never reverse-engineered from the stop.
+    atr_at_entry: Mapped[float | None] = mapped_column(Float)
+    # Initial $/share risk (|entry - initial stop|); defines 1R for trailing
+    # activation and survives restarts even after the stop has been ratcheted.
+    initial_risk: Mapped[float | None] = mapped_column(Float)
     exit_price: Mapped[float | None] = mapped_column(Float)
     exit_time: Mapped[dt.datetime | None] = mapped_column(DateTime)
     exit_reason: Mapped[str | None] = mapped_column(String(16))

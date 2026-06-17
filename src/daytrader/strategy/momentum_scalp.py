@@ -12,7 +12,7 @@ import math
 from daytrader.data.data_engine import MarketSnapshot
 from daytrader.data.providers.base import Timeframe
 from daytrader.strategy.base import Direction, Signal, Strategy
-from daytrader.strategy.util import relative_volume
+from daytrader.strategy.util import relative_volume_tod
 
 
 class MomentumScalpStrategy(Strategy):
@@ -42,7 +42,7 @@ class MomentumScalpStrategy(Strategy):
         fast_prev, slow_prev = float(prev[fast_col]), float(prev[slow_col])
         close = float(last["close"])
         atr = float(last["atr"])
-        rvol = relative_volume(df)
+        rvol = relative_volume_tod(df)
 
         crossed_up = fast_prev <= slow_prev and fast_now > slow_now
         crossed_down = fast_prev >= slow_prev and fast_now < slow_now

@@ -15,6 +15,7 @@ import pandas as pd
 from daytrader.config.settings import IndicatorsConfig
 from daytrader.data import indicators as ind
 from daytrader.data.providers.base import MarketDataProvider, Timeframe
+from daytrader.data.session import filter_rth
 from daytrader.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -67,13 +68,26 @@ class MarketSnapshot:
 class DataEngine:
     """Fetches and enriches market data behind a provider."""
 
-    def __init__(self, provider: MarketDataProvider, config: IndicatorsConfig) -> None:
+    def __init__(
+        self,
+        provider: MarketDataProvider,
+        config: IndicatorsConfig,
+        rth_only: bool = False,
+    ) -> None:
         self.provider = provider
         self.config = config
+        self.rth_only = rth_only
 
     # ── low-level enrichment ───────────────────────────────────
     def enrich(self, df: pd.DataFrame, timeframe: Timeframe) -> pd.DataFrame:
-        """Append the configured indicator set; VWAP only for intraday frames."""
+        """Append the configured indicator set; VWAP only for intraday frames.
+
+        When ``rth_only`` is set, intraday frames are first restricted to
+        regular trading hours so session-anchored values (opening range,
+        VWAP, relative volume) are computed on 09:30-16:00 ET data only.
+        """
+        if self.rth_only and timeframe != Timeframe.DAY:
+            df = filter_rth(df)
         return ind.add_indicators(
             df,
             ema_periods=self.config.ema_periods,

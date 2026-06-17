@@ -75,26 +75,60 @@ class RiskManager:
         return entry + rr * risk if side is Side.BUY else entry - rr * risk
 
     def update_trailing_stop(
-        self, side: Side, current_stop: float, peak_price: float, atr: float
+        self,
+        side: Side,
+        current_stop: float,
+        peak_price: float,
+        atr: float,
+        entry: float | None = None,
+        initial_risk: float | None = None,
     ) -> float:
-        """Ratchet the stop in the trade's favor; never loosens it."""
+        """Ratchet the stop in the trade's favor; never loosens it.
+
+        When ``entry``/``initial_risk`` are provided, the trail only activates
+        after the trade has moved at least +1R in its favor; on activation the
+        stop jumps to at least breakeven, then trails ``mult * atr`` behind
+        the peak. Without them (legacy callers/tests), trailing is immediate.
+        """
         if self.config.take_profit.method != "trailing":
             return current_stop
         mult = self.config.take_profit.trailing_atr_multiplier
+
+        if entry is not None and initial_risk is not None and initial_risk > 0:
+            favorable = (peak_price - entry) if side is Side.BUY else (entry - peak_price)
+            if favorable < initial_risk:
+                return current_stop  # not yet +1R; leave the initial stop alone
+            if side is Side.BUY:
+                return max(current_stop, entry, peak_price - mult * atr)
+            return min(current_stop, entry, peak_price + mult * atr)
+
         if side is Side.BUY:
             return max(current_stop, peak_price - mult * atr)
         return min(current_stop, peak_price + mult * atr)
 
     # ── sizing ─────────────────────────────────────────────────
     def position_size(
-        self, equity: float, entry: float, stop: float, available_cash: float | None = None
+        self,
+        equity: float,
+        entry: float,
+        stop: float,
+        available_cash: float | None = None,
+        risk_pct: float | None = None,
     ) -> SizingResult:
-        """Size so that a stop-out loses at most ``max_risk_per_trade_pct`` of equity."""
+        """Size so that a stop-out loses at most the risk budget.
+
+        ``risk_pct`` overrides the configured ``max_risk_per_trade_pct`` (used
+        by Kelly sizing); it is always clamped to that configured maximum.
+        """
         risk_per_share = abs(entry - stop)
         if risk_per_share <= 0 or entry <= 0:
             return SizingResult(0, 0.0, risk_per_share, "none")
 
-        risk_budget = equity * self.config.max_risk_per_trade_pct / 100.0
+        effective_pct = self.config.max_risk_per_trade_pct
+        if risk_pct is not None:
+            effective_pct = min(max(risk_pct, 0.0), self.config.max_risk_per_trade_pct)
+
+        risk_budget = equity * effective_pct / 100.0
         qty = math.floor(risk_budget / risk_per_share)
         capped_by = "risk"
 
@@ -118,14 +152,32 @@ class RiskManager:
             capped_by=capped_by,
         )
 
-    # ── account-level guards ───────────────────────────────────
-    def drawdown_pct(self, starting_equity: float, current_equity: float) -> float:
-        if starting_equity <= 0:
-            return 0.0
-        return (starting_equity - current_equity) / starting_equity * 100.0
+    # ── Kelly sizing ───────────────────────────────────────────
+    def kelly_risk_pct(self, win_rate: float, payoff_ratio: float) -> float:
+        """Fractional-Kelly risk percentage, capped at the configured maximum.
 
-    def is_drawdown_breached(self, starting_equity: float, current_equity: float) -> bool:
-        return self.drawdown_pct(starting_equity, current_equity) >= self.config.max_daily_drawdown_pct
+        Kelly fraction: f* = p - (1 - p) / b, where p is the win rate and b
+        the payoff ratio (avg win / avg loss). Scaled by the configured
+        fraction (default quarter-Kelly); a non-positive edge returns 0,
+        which suppresses the trade entirely.
+        """
+        if payoff_ratio <= 0:
+            return 0.0
+        f_star = win_rate - (1.0 - win_rate) / payoff_ratio
+        if f_star <= 0:
+            return 0.0
+        scaled_pct = f_star * self.config.kelly.fraction * 100.0
+        return min(scaled_pct, self.config.max_risk_per_trade_pct)
+
+    # ── account-level guards ───────────────────────────────────
+    def drawdown_pct(self, reference_equity: float, current_equity: float) -> float:
+        """Percentage decline from ``reference_equity`` (day start or peak)."""
+        if reference_equity <= 0:
+            return 0.0
+        return (reference_equity - current_equity) / reference_equity * 100.0
+
+    def is_drawdown_breached(self, reference_equity: float, current_equity: float) -> bool:
+        return self.drawdown_pct(reference_equity, current_equity) >= self.config.max_daily_drawdown_pct
 
     def can_open_new(self, open_positions: int) -> bool:
         return open_positions < self.config.max_open_positions

@@ -43,8 +43,10 @@ def test_open_position_sizes_and_persists(db):
     assert len(eng.positions.get_open()) == 1
 
 
-def test_take_profit_exit(db):
-    eng = _engine(db)
+def test_take_profit_exit_fixed_method(db):
+    settings = Settings()
+    settings.risk.take_profit.method = "fixed"
+    eng = _engine(db, settings)
     eng.process_signals([_buy_signal(price=100.0, stop=98.0)], prices={"AAPL": 100.0})
     # tp = entry + 2 * (entry - stop) = 100 + 4 = 104.
     closed = eng.manage_positions(prices={"AAPL": 105.0})
@@ -54,6 +56,43 @@ def test_take_profit_exit(db):
     assert metric.total_trades == 1
     assert metric.winning_trades == 1
     assert metric.realized_pnl > 0
+
+
+def test_trailing_method_has_no_fixed_target(db):
+    settings = Settings()
+    settings.risk.take_profit.method = "trailing"
+    eng = _engine(db, settings)
+    eng.process_signals([_buy_signal(price=100.0, stop=98.0)], prices={"AAPL": 100.0})
+    pos = eng.open_positions["AAPL"]
+    assert pos.take_profit is None
+    # A big favorable move does NOT cap out; the trail ratchets instead.
+    closed = eng.manage_positions(prices={"AAPL": 110.0})
+    assert closed == []
+    assert eng.open_positions["AAPL"].stop_loss > 98.0  # trail activated past +1R
+
+
+def test_atr_at_entry_persisted_and_rehydrated(db):
+    eng1 = _engine(db)
+    eng1.process_signals([_buy_signal(price=100.0, stop=98.0)], prices={"AAPL": 100.0})
+    assert eng1.open_positions["AAPL"].atr_at_entry == 1.0  # from signal indicators
+
+    eng2 = _engine(db)
+    pos = eng2.open_positions["AAPL"]
+    assert pos.atr_at_entry == 1.0
+    assert pos.initial_risk > 0
+
+
+def test_signals_allocated_best_first(db):
+    settings = Settings()
+    settings.risk.max_open_positions = 1
+    eng = _engine(db, settings)
+    weak = _buy_signal("AAPL")
+    weak.confidence = 0.2
+    strong = _buy_signal("MSFT")
+    strong.confidence = 0.9
+    # Weak signal arrives first; the allocator must still pick the strong one.
+    eng.process_signals([weak, strong], prices={"AAPL": 100.0, "MSFT": 100.0})
+    assert list(eng.open_positions) == ["MSFT"]
 
 
 def test_stop_loss_exit(db):

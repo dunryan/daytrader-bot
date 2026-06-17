@@ -21,11 +21,48 @@ def bar_minutes(timeframe: Timeframe) -> int:
 
 
 def relative_volume(df: pd.DataFrame, window: int = 20) -> float:
-    """Latest bar's volume divided by the mean of the prior ``window`` bars."""
+    """Latest bar's volume divided by the mean of the prior ``window`` bars.
+
+    Naive rolling baseline; prefer :func:`relative_volume_tod` for intraday
+    frames since rolling windows cross session boundaries and are distorted
+    by the U-shaped intraday volume profile.
+    """
     if df is None or len(df) < 2:
         return 0.0
     prior = df["volume"].iloc[-(window + 1) : -1]
     avg = float(prior.mean()) if len(prior) else 0.0
+    if avg <= 0:
+        return 0.0
+    return float(df["volume"].iloc[-1]) / avg
+
+
+def relative_volume_tod(df: pd.DataFrame, sessions: int = 10) -> float:
+    """Time-of-day-matched relative volume.
+
+    Compares the latest bar's volume against the mean volume of the bar at
+    the *same intra-session index* across the prior ``sessions`` sessions.
+    This respects the U-shaped intraday volume profile: the 09:35 bar is
+    benchmarked against prior 09:35 bars, not against overnight lulls.
+
+    Falls back to the naive rolling measure when there is no prior-session
+    history (e.g. unit tests or the first day of a fresh cache).
+    """
+    if df is None or len(df) < 2:
+        return 0.0
+    dates = pd.Index(df.index).normalize()
+    last_date = dates[-1]
+    bar_pos = int((dates == last_date).sum()) - 1  # 0-based index within session
+
+    prior_dates = [d for d in pd.unique(dates) if d < last_date][-sessions:]
+    samples: list[float] = []
+    for d in prior_dates:
+        day = df[dates == d]
+        if len(day) > bar_pos:
+            samples.append(float(day["volume"].iloc[bar_pos]))
+
+    if not samples:
+        return relative_volume(df)
+    avg = sum(samples) / len(samples)
     if avg <= 0:
         return 0.0
     return float(df["volume"].iloc[-1]) / avg

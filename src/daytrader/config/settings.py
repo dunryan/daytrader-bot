@@ -82,6 +82,10 @@ class DataConfig(BaseModel):
     feed: Literal["iex", "sip"] = "iex"
     timeframes: list[str] = Field(default_factory=lambda: ["1m", "5m", "15m", "1d"])
     poll_interval_seconds: int = Field(default=60, gt=0)
+    # Restrict intraday bars to regular trading hours (09:30-16:00 ET). Without
+    # this, vendors that include extended-hours bars corrupt the opening range,
+    # session VWAP, and relative-volume baselines.
+    rth_only: bool = True
 
 
 class ResearchFilters(BaseModel):
@@ -142,6 +146,16 @@ class TakeProfitConfig(BaseModel):
     trailing_atr_multiplier: float = Field(default=1.5, gt=0)
 
 
+class KellyConfig(BaseModel):
+    """Fractional-Kelly risk sizing. Disabled until per-strategy stats are
+    statistically meaningful; always hard-capped by ``max_risk_per_trade_pct``."""
+
+    enabled: bool = False
+    fraction: float = Field(default=0.25, gt=0, le=1.0)
+    min_trades: int = Field(default=50, gt=0)
+    lookback_trades: int = Field(default=200, gt=0)
+
+
 class RiskConfig(BaseModel):
     starting_equity: float = Field(default=100_000.0, gt=0)
     max_risk_per_trade_pct: float = Field(default=1.0, gt=0, le=100)
@@ -152,6 +166,10 @@ class RiskConfig(BaseModel):
     take_profit: TakeProfitConfig = Field(default_factory=TakeProfitConfig)
     slippage_pct: float = Field(default=0.05, ge=0)
     commission_per_trade: float = Field(default=0.0, ge=0)
+    # Marketable-limit entry collar (basis points past the reference price).
+    # Caps the worst acceptable entry instead of blindly crossing the spread.
+    entry_collar_bps: float = Field(default=15.0, ge=0)
+    kelly: KellyConfig = Field(default_factory=KellyConfig)
 
 
 class StrategyToggle(BaseModel):
@@ -161,17 +179,70 @@ class StrategyToggle(BaseModel):
     enabled: bool = False
 
 
+class PfGateConfig(BaseModel):
+    """Rolling profit-factor deployment gate.
+
+    Blocks new entries when the last ``lookback_trades`` closed round-trips
+    have profit factor below ``min_pf``. Requires at least ``min_trades``
+    history before the gate activates.
+    """
+
+    mode: Literal["off", "shadow", "enforce"] = "off"
+    lookback_trades: int = Field(default=20, gt=0)
+    min_trades: int = Field(default=10, gt=0)
+    min_pf: float = Field(default=0.90, ge=0)
+
+
+class VolGateConfig(BaseModel):
+    """Day-level volatility gate (prior-session VIX / SPY ATR proxy).
+
+    Blocks new entries on elevated-volatility sessions while still managing
+    open positions. Modes mirror the regime filter: off | shadow | enforce.
+    """
+
+    mode: Literal["off", "shadow", "enforce"] = "off"
+    vix_symbol: str = "VIX"
+    max_vix: float = Field(default=28.0, ge=0)
+    max_vix_percentile: float = Field(default=0.85, ge=0, le=1.0)
+    use_spy_proxy: bool = True
+    max_spy_atr_percentile: float = Field(default=0.80, ge=0, le=1.0)
+
+
+class RegimeFilterConfig(BaseModel):
+    """Gates which strategies may run in which market regime.
+
+    Modes: ``off`` (no classification), ``shadow`` (classify + log what would
+    be blocked, but let everything through), ``enforce`` (actually block).
+    """
+
+    mode: Literal["off", "shadow", "enforce"] = "off"
+    # strategy name -> regimes in which it is allowed to trade.
+    allowed: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "opening_range_breakout": ["trend"],
+            "momentum_scalp": ["trend"],
+            "vwap_pullback": ["balanced"],
+        }
+    )
+
+
 class StrategiesConfig(BaseModel):
     model_config = {"extra": "allow"}
     vwap_pullback: StrategyToggle = Field(default_factory=StrategyToggle)
     opening_range_breakout: StrategyToggle = Field(default_factory=StrategyToggle)
     momentum_scalp: StrategyToggle = Field(default_factory=StrategyToggle)
+    regime_filter: RegimeFilterConfig = Field(default_factory=RegimeFilterConfig)
+    pf_gate: PfGateConfig = Field(default_factory=PfGateConfig)
+    vol_gate: VolGateConfig = Field(default_factory=VolGateConfig)
 
 
 class ScheduleConfig(BaseModel):
     premarket_research: str = "07:00"
     market_open: str = "09:30"
     market_close: str = "16:00"
+    # Flatten BEFORE the close: live market orders submitted after 16:00 are
+    # rejected, which would silently carry positions overnight.
+    flatten_time: str = "15:55"
     report_time: str = "16:15"
 
     @field_validator("*")
@@ -193,6 +264,23 @@ class ReportingConfig(BaseModel):
     attach_individual_charts: bool = True
 
 
+class MetaFilterConfig(BaseModel):
+    """Meta-label signal filter (secondary ML quality gate).
+
+    ``shadow`` scores every signal and logs what it would block without
+    blocking; ``enforce`` drops signals below ``threshold``. With no trained
+    model on disk the filter is inert regardless of mode.
+    """
+
+    mode: Literal["off", "shadow", "enforce"] = "off"
+    threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+    model_path: str = "data/models/meta_label.pkl"
+
+
+class MLConfig(BaseModel):
+    meta_filter: MetaFilterConfig = Field(default_factory=MetaFilterConfig)
+
+
 # ════════════════════════════════════════════════════════════
 #  Top-level settings
 # ════════════════════════════════════════════════════════════
@@ -207,6 +295,7 @@ class Settings(BaseModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     reporting: ReportingConfig = Field(default_factory=ReportingConfig)
+    ml: MLConfig = Field(default_factory=MLConfig)
 
     # Secrets are attached after construction (not part of YAML).
     secrets: Secrets = Field(default_factory=Secrets)

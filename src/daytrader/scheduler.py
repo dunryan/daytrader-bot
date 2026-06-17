@@ -45,16 +45,22 @@ def build_scheduler(app: Application) -> BlockingScheduler:
         id="trading_cycle", name="Trading cycle", max_instances=1, coalesce=True,
     )
 
+    fl_h, fl_m = _hhmm(schedule.flatten_time)
+    sched.add_job(
+        app.market_flatten, CronTrigger(day_of_week="mon-fri", hour=fl_h, minute=fl_m, timezone=tz),
+        id="market_flatten", name="Pre-close flatten", misfire_grace_time=300,
+    )
+
     rc_h, rc_m = _hhmm(schedule.report_time)
     sched.add_job(
         app.market_close, CronTrigger(day_of_week="mon-fri", hour=rc_h, minute=rc_m, timezone=tz),
-        id="market_close", name="Market close + report", misfire_grace_time=3600,
+        id="market_close", name="Market close report", misfire_grace_time=3600,
     )
 
     logger.info(
-        "Scheduler configured: research @%s, cycle every %ss, report @%s (%s)",
+        "Scheduler configured: research @%s, cycle every %ss, flatten @%s, report @%s (%s)",
         schedule.premarket_research, app.settings.data.poll_interval_seconds,
-        schedule.report_time, app.settings.app.timezone,
+        schedule.flatten_time, schedule.report_time, app.settings.app.timezone,
     )
     return sched
 

@@ -1,0 +1,41 @@
+# Stratified symbol lists for backtest label generation (Phase 5).
+# Training: high-beta gap-day ORB candidates. Holdout: never used for meta-model fit.
+#
+# Usage:
+#   python backtest.py --symbols-file config/backtest_universe.yaml --universe-set training ...
+#   python scripts/train_meta_model.py --labels ... --holdout-symbols AAPL,INTC,QCOM,SNOW,U
+
+training:
+  - AMD
+  - NVDA
+  - MU
+  - AVGO
+  - LRCX
+  - AMAT
+  - MRVL
+  - "ON"
+  - TSLA
+  - META
+  - AMZN
+  - NFLX
+  - GOOGL
+  - COIN
+  - PLTR
+  - SMCI
+  - ARM
+  - HOOD
+  - MARA
+  - RIOT
+  - MSTR
+  - SHOP
+  - APP
+  - CRM
+  - PANW
+  - CRWD
+
+holdout:
+  - AAPL
+  - INTC
+  - QCOM
+  - SNOW
+  - U

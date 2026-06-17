@@ -32,6 +32,15 @@ def _set_sqlite_pragma(dbapi_connection, connection_record):  # noqa: ANN001
         pass
 
 
+#: Additive, idempotent column migrations for existing SQLite databases.
+#: Fresh databases get these columns from ``create_all``; this list only
+#: backfills schemas created before the column existed.
+_SQLITE_MIGRATIONS: dict[str, dict[str, str]] = {
+    "positions": {"atr_at_entry": "FLOAT", "initial_risk": "FLOAT"},
+    "signals": {"meta_prob": "FLOAT"},
+}
+
+
 class Database:
     """Owns the engine and session factory; creates tables on init."""
 
@@ -42,10 +51,30 @@ class Database:
         self.engine = create_engine(url, echo=echo, future=True, connect_args=connect_args)
         self._session_factory = sessionmaker(bind=self.engine, expire_on_commit=False, future=True)
         self.create_all()
+        self._migrate()
         logger.info("Database ready at %s", url)
 
     def create_all(self) -> None:
         Base.metadata.create_all(self.engine)
+
+    def _migrate(self) -> None:
+        """Apply additive column migrations (SQLite only, idempotent)."""
+        if not self.url.startswith("sqlite"):
+            return
+        with self.engine.connect() as conn:
+            for table, columns in _SQLITE_MIGRATIONS.items():
+                existing = {
+                    row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")
+                }
+                if not existing:
+                    continue  # table missing entirely; create_all owns it
+                for column, ddl_type in columns.items():
+                    if column not in existing:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"
+                        )
+                        logger.info("Migrated: added %s.%s", table, column)
+            conn.commit()
 
     @contextmanager
     def session(self) -> Iterator[Session]:

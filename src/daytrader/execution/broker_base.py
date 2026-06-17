@@ -45,7 +45,12 @@ class FillResult:
 
 
 class Broker(ABC):
-    """Minimal broker surface: a cash ledger plus market fills."""
+    """Broker surface: cash ledger, fills, and protective-order management.
+
+    The bracket/stop methods have safe defaults so the :class:`VirtualBroker`
+    stays minimal (software stops are authoritative in simulation); the live
+    broker overrides them with real resting orders at the venue.
+    """
 
     is_simulated: bool = True
 
@@ -56,3 +61,41 @@ class Broker(ABC):
     @abstractmethod
     def fill_market(self, symbol: str, side: Side, qty: float, ref_price: float) -> FillResult:
         """Execute a market order at (around) ``ref_price`` and adjust cash."""
+
+    # ── protective-order surface (overridden by LiveBroker) ────
+    def get_equity(self) -> float:
+        """Total account equity. Defaults to cash for brokers that don't track positions."""
+        return self.get_cash()
+
+    def submit_bracket(
+        self,
+        symbol: str,
+        side: Side,
+        qty: float,
+        ref_price: float,
+        stop: float,
+        target: float | None = None,
+    ) -> FillResult | None:
+        """Entry plus broker-side protective stop (and optional take-profit).
+
+        Returns ``None`` when the entry could not be filled (e.g. a marketable
+        limit expired unfilled). Default: plain market fill, no resting orders
+        — software stop management remains authoritative.
+        """
+        return self.fill_market(symbol, side, qty, ref_price)
+
+    def replace_stop(self, symbol: str, new_stop: float) -> bool:
+        """Move the resting stop order for ``symbol``. Returns success."""
+        return True
+
+    def cancel_symbol_orders(self, symbol: str) -> int:
+        """Cancel all open orders for ``symbol``; returns the count cancelled."""
+        return 0
+
+    def list_positions(self) -> dict[str, float] | None:
+        """Open positions at the broker as ``symbol -> signed qty``.
+
+        ``None`` means the broker cannot report positions (simulation), in
+        which case reconciliation is skipped.
+        """
+        return None
