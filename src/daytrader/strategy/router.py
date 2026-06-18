@@ -55,6 +55,9 @@ def build_strategies(settings: Settings) -> list[Strategy]:
                 require_gap_direction_match=bool(getattr(t, "require_gap_direction_match", False)),
                 max_gap_norm=float(getattr(t, "max_gap_norm", 0.0)),
                 max_entry_minutes_after_open=int(getattr(t, "max_entry_minutes_after_open", 0)),
+                min_breakout_rvol=float(getattr(t, "min_breakout_rvol", 0.0)),
+                min_or_width_pct=float(getattr(t, "min_or_width_pct", 0.0)),
+                max_or_width_atr=float(getattr(t, "max_or_width_atr", 0.0)),
             )
         )
     if cfg.momentum_scalp.enabled:

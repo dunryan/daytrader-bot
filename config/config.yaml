@@ -63,6 +63,9 @@ strategies:
     max_gap_pct: 8.0                 # reject exhaustion gaps (gap-and-crap)
     max_gap_norm: 4.0                # reject gaps > 4x prior daily ATR
     max_entry_minutes_after_open: 90 # no new ORB entries after 11:00 ET (0 = off)
+    min_breakout_rvol: 1.75           # SIP sweep 2025-01→2026-06: PF 1.16 clean, 1.00 stress
+    min_or_width_pct: 0.0             # min OR width as % of open (0.3 tested — use CLI to A/B)
+    max_or_width_atr: 0.0             # max OR width vs daily ATR (1.5 tested — use CLI to A/B)
   momentum_scalp:
     enabled: false
     fast_ema: 9

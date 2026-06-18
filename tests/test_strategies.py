@@ -221,6 +221,59 @@ def test_orb_blocks_entry_after_morning_window():
     assert sig_ok.direction is Direction.BUY
 
 
+def test_orb_blocks_low_volume_breakout_when_hv_filter_enabled():
+    rows = [
+        {"open": 100, "high": 101, "low": 99, "close": 100, "volume": 1000, "atr": 1.0},
+        {"open": 100, "high": 102, "low": 99, "close": 101, "volume": 1000, "atr": 1.0},
+        {"open": 101, "high": 102, "low": 100, "close": 101, "volume": 1000, "atr": 1.0},
+        {"open": 101, "high": 103, "low": 101, "close": 103, "volume": 1100, "atr": 1.0},
+    ]
+    df = _intraday(rows)
+    orb = OpeningRangeBreakoutStrategy(
+        opening_range_minutes=15, volume_confirmation=False, min_breakout_rvol=2.5
+    )
+    sig = orb.evaluate(_snapshot(df))
+    assert sig.direction is Direction.HOLD
+
+
+def test_orb_blocks_narrow_opening_range():
+    rows = [
+        {"open": 100, "high": 100.05, "low": 99.95, "close": 100, "volume": 1000, "atr": 1.0},
+        {"open": 100, "high": 100.08, "low": 99.98, "close": 100.02, "volume": 1000, "atr": 1.0},
+        {"open": 100.02, "high": 100.1, "low": 100, "close": 100.05, "volume": 1000, "atr": 1.0},
+        {"open": 100.1, "high": 101, "low": 100.08, "close": 100.9, "volume": 5000, "atr": 1.0},
+    ]
+    df = _intraday(rows)
+    orb = OpeningRangeBreakoutStrategy(
+        opening_range_minutes=15, volume_confirmation=False, min_or_width_pct=0.3
+    )
+    sig = orb.evaluate(_snapshot(df))
+    assert sig.direction is Direction.HOLD
+    assert "narrow" in sig.rationale.lower()
+
+
+def test_orb_blocks_wide_opening_range():
+    rows = [
+        {"open": 100, "high": 104, "low": 96, "close": 100, "volume": 1000, "atr": 1.0},
+        {"open": 100, "high": 104, "low": 96, "close": 101, "volume": 1000, "atr": 1.0},
+        {"open": 101, "high": 104, "low": 96, "close": 101, "volume": 1000, "atr": 1.0},
+        {"open": 101, "high": 105, "low": 100, "close": 104, "volume": 5000, "atr": 1.0},
+    ]
+    df = _intraday(rows)
+    daily = pd.DataFrame(
+        {"open": [98], "high": [102], "low": [97], "close": [99], "atr": [2.0], "volume": [1e6]},
+        index=pd.date_range("2026-05-30", periods=1, freq="B", tz="UTC"),
+    )
+    snap = _snapshot(df)
+    snap.frames[Timeframe.DAY] = daily
+    orb = OpeningRangeBreakoutStrategy(
+        opening_range_minutes=15, volume_confirmation=False, max_or_width_atr=1.5
+    )
+    sig = orb.evaluate(snap)
+    assert sig.direction is Direction.HOLD
+    assert "wide" in sig.rationale.lower()
+
+
 # ── Momentum scalp ───────────────────────────────────────────
 def test_momentum_long_on_fresh_cross_with_volume():
     rows = [

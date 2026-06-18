@@ -27,8 +27,9 @@ class BarStore:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def _path(self, symbol: str, timeframe: Timeframe) -> Path:
-        return self.cache_dir / f"{symbol}_{timeframe.value}.parquet"
+    def _path(self, symbol: str, timeframe: Timeframe, feed: str | None = None) -> Path:
+        suffix = f"_{feed}" if feed else ""
+        return self.cache_dir / f"{symbol}_{timeframe.value}{suffix}.parquet"
 
     def get(
         self,
@@ -37,13 +38,14 @@ class BarStore:
         timeframe: Timeframe,
         start: dt.datetime,
         end: dt.datetime,
+        feed: str | None = None,
     ) -> dict[str, pd.DataFrame]:
         """Return bars per symbol for [start, end], fetching gaps from the provider."""
         out: dict[str, pd.DataFrame] = {}
         to_fetch: list[str] = []
 
         for symbol in symbols:
-            path = self._path(symbol, timeframe)
+            path = self._path(symbol, timeframe, feed)
             if path.exists():
                 try:
                     df = pd.read_parquet(path)
@@ -69,7 +71,7 @@ class BarStore:
                 if df is None or df.empty:
                     continue
                 try:
-                    df.to_parquet(self._path(symbol, timeframe))
+                    df.to_parquet(self._path(symbol, timeframe, feed))
                 except Exception:  # noqa: BLE001
                     logger.exception("Failed to cache %s %s", symbol, timeframe.value)
                 out[symbol] = df

@@ -123,6 +123,12 @@ def parse_args() -> argparse.Namespace:
                         help="path to meta-label model pickle")
     parser.add_argument("--orb-entry-window", type=int, default=None,
                         help="ORB max minutes after 09:30 for new entries (0=off)")
+    parser.add_argument("--orb-min-breakout-rvol", type=float, default=None,
+                        help="ORB min breakout bar RVOL (overrides volume_confirmation 1.0x)")
+    parser.add_argument("--orb-min-width-pct", type=float, default=None,
+                        help="ORB min opening-range width as %% of session open (0=off)")
+    parser.add_argument("--orb-max-width-atr", type=float, default=None,
+                        help="ORB max opening-range width as multiple of daily ATR (0=off)")
     parser.add_argument("--tp-method", choices=("trailing", "fixed"), default=None)
     parser.add_argument("--tp-rr", type=float, default=None)
     parser.add_argument("--trail-atr-mult", type=float, default=None)
@@ -184,6 +190,19 @@ def main() -> None:
         print(f"ORB entry window: {args.orb_entry_window} min after open")
     elif getattr(orb, "max_entry_minutes_after_open", 0) > 0:
         print(f"ORB entry window: {orb.max_entry_minutes_after_open} min after open (config)")
+
+    if args.orb_min_breakout_rvol is not None:
+        orb.min_breakout_rvol = args.orb_min_breakout_rvol
+    if args.orb_min_width_pct is not None:
+        orb.min_or_width_pct = args.orb_min_width_pct
+    if args.orb_max_width_atr is not None:
+        orb.max_or_width_atr = args.orb_max_width_atr
+    hv = float(getattr(orb, "min_breakout_rvol", 0) or 0)
+    min_w = float(getattr(orb, "min_or_width_pct", 0) or 0)
+    max_w = float(getattr(orb, "max_or_width_atr", 0) or 0)
+    if hv > 0 or min_w > 0 or max_w > 0:
+        print(f"ORB filters: min_breakout_rvol={hv or 'off'} min_or_width_pct={min_w or 'off'} "
+              f"max_or_width_atr={max_w or 'off'}")
 
     if args.max_gap_norm is not None:
         orb.max_gap_norm = args.max_gap_norm
@@ -247,12 +266,13 @@ def main() -> None:
     gate_symbols = list(dict.fromkeys(symbols + ["SPY"]))
     vix_sym = settings.strategies.vol_gate.vix_symbol.upper()
     print(f"Loading {len(symbols)} symbol(s): 5m bars {args.start} -> {args.end} ...")
-    raw_5m = store.get(provider, symbols, Timeframe.MIN_5, start, end)
+    feed = settings.data.feed
+    raw_5m = store.get(provider, symbols, Timeframe.MIN_5, start, end, feed=feed)
     raw_day = store.get(
-        provider, gate_symbols, Timeframe.DAY, start - dt.timedelta(days=400), end
+        provider, gate_symbols, Timeframe.DAY, start - dt.timedelta(days=400), end, feed=feed
     )
     vix_day = store.get(
-        provider, [vix_sym], Timeframe.DAY, start - dt.timedelta(days=400), end
+        provider, [vix_sym], Timeframe.DAY, start - dt.timedelta(days=400), end, feed=feed
     ).get(vix_sym)
 
     intraday = {s: data_engine.enrich(df, Timeframe.MIN_5) for s, df in raw_5m.items()}

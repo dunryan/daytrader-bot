@@ -53,6 +53,9 @@ class OpeningRangeBreakoutStrategy(Strategy):
         require_gap_direction_match: bool = False,
         max_gap_norm: float = 0.0,
         max_entry_minutes_after_open: int = 0,
+        min_breakout_rvol: float = 0.0,
+        min_or_width_pct: float = 0.0,
+        max_or_width_atr: float = 0.0,
     ) -> None:
         if entry_mode not in ("breakout", "retest"):
             raise ValueError(f"entry_mode must be 'breakout' or 'retest', got {entry_mode!r}")
@@ -64,6 +67,43 @@ class OpeningRangeBreakoutStrategy(Strategy):
         self.require_gap_direction_match = require_gap_direction_match
         self.max_gap_norm = max_gap_norm
         self.max_entry_minutes_after_open = max_entry_minutes_after_open
+        self.min_breakout_rvol = min_breakout_rvol
+        self.min_or_width_pct = min_or_width_pct
+        self.max_or_width_atr = max_or_width_atr
+
+    def _volume_ok(self, rvol: float) -> bool:
+        """Breakout volume gate: HV threshold overrides legacy RVOL >= 1.0."""
+        if self.min_breakout_rvol > 0:
+            return rvol >= self.min_breakout_rvol
+        if self.volume_confirmation:
+            return rvol >= 1.0
+        return True
+
+    def _check_or_width(
+        self,
+        or_size: float,
+        open_px: float | None,
+        daily,
+        intraday_atr: float,
+    ) -> tuple[bool, str, dict[str, float]]:
+        """Reject too-narrow (noise) or too-wide (exhausted ADR) opening ranges."""
+        extras: dict[str, float] = {}
+        if open_px and open_px > 0:
+            width_pct = or_size / open_px * 100.0
+            extras["or_width_pct"] = round(width_pct, 4)
+            if self.min_or_width_pct > 0 and width_pct < self.min_or_width_pct:
+                return False, "OR too narrow", extras
+        day_atr = intraday_atr
+        if daily is not None and not daily.empty and "atr" in daily.columns:
+            atr_series = daily["atr"].dropna()
+            if not atr_series.empty:
+                day_atr = float(atr_series.iloc[-1])
+        if day_atr > 0:
+            width_atr = or_size / day_atr
+            extras["or_width_atr"] = round(width_atr, 4)
+            if self.max_or_width_atr > 0 and width_atr > self.max_or_width_atr:
+                return False, "OR too wide", extras
+        return True, "", extras
 
     def evaluate(self, snapshot: MarketSnapshot) -> Signal:
         df = snapshot.frame(self.timeframe)
@@ -89,7 +129,7 @@ class OpeningRangeBreakoutStrategy(Strategy):
         close = float(last["close"])
         atr = float(last.get("atr")) if last.get("atr") is not None else 0.0
         rvol = relative_volume_tod(df)
-        vol_ok = (not self.volume_confirmation) or rvol >= 1.0
+        vol_ok = self._volume_ok(rvol)
 
         daily = snapshot.frame(Timeframe.DAY)
         open_px = session_open_price(session)
@@ -97,13 +137,20 @@ class OpeningRangeBreakoutStrategy(Strategy):
         if self.max_gap_norm > 0 and gap_feats.get("gap_norm", 0) > self.max_gap_norm:
             return self._hold(snapshot.symbol, "gap exceeds max_gap_norm")
 
+        or_size = max(or_high - or_low, 1e-9)
+        width_ok, width_reason, width_feats = self._check_or_width(
+            or_size, open_px, daily, atr
+        )
+        if not width_ok:
+            return self._hold(snapshot.symbol, width_reason)
+
         indicators = {
             "close": close, "or_high": or_high, "or_low": or_low,
             "or_bars": n_or, "relative_volume": round(rvol, 3), "atr": atr,
             "entry_mode": self.entry_mode,
             **gap_feats,
+            **width_feats,
         }
-        or_size = max(or_high - or_low, 1e-9)
         or_mid = (or_high + or_low) / 2.0
 
         if self.entry_mode == "breakout":
@@ -121,7 +168,12 @@ class OpeningRangeBreakoutStrategy(Strategy):
         self, symbol, close, or_high, or_low, or_size, rvol, vol_ok, indicators
     ) -> Signal:
         gap_dir = indicators.get("gap_direction", 0)
-        if close > or_high and vol_ok:
+        if close > or_high:
+            if not vol_ok:
+                return self._hold(
+                    symbol,
+                    f"long blocked: RVOL {rvol:.2f}x below {self._rvol_threshold():.1f}x",
+                )
             if self.require_gap_direction_match and not direction_matches_signal(
                 gap_dir, Direction.BUY.value
             ):
@@ -137,7 +189,12 @@ class OpeningRangeBreakoutStrategy(Strategy):
                 timeframe=self.timeframe.value, indicators=indicators,
                 stop_hint=or_low, target_hint=close + or_size,
             )
-        if close < or_low and vol_ok:
+        if close < or_low:
+            if not vol_ok:
+                return self._hold(
+                    symbol,
+                    f"short blocked: RVOL {rvol:.2f}x below {self._rvol_threshold():.1f}x",
+                )
             if self.require_gap_direction_match and not direction_matches_signal(
                 gap_dir, Direction.SELL.value
             ):
@@ -154,6 +211,11 @@ class OpeningRangeBreakoutStrategy(Strategy):
                 stop_hint=or_high, target_hint=close - or_size,
             )
         return self._hold(symbol, "no opening-range breakout")
+
+    def _rvol_threshold(self) -> float:
+        if self.min_breakout_rvol > 0:
+            return self.min_breakout_rvol
+        return 1.0 if self.volume_confirmation else 0.0
 
     # ── break-then-retest entry ──────────────────────────────────
 
