@@ -120,7 +120,7 @@ ml:
   meta_filter:
     mode: "shadow"                 # off | shadow (score + log) | enforce (block)
     threshold: 0.55                # min P(win); tuned for core10 model (AUC ~0.57)
-    model_path: "data/models/meta_label_core10.pkl"
+    model_path: "data/models/meta_label_core10_oos.pkl"
 
 # ── Schedule (orchestrator) — times in app.timezone ──
 schedule:

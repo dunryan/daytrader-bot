@@ -1,0 +1,75 @@
+Action plan (prioritized for your repo)
+
+Phase 0 — Continue paper sim (now → 4–8 weeks)
+Goal: Validate structural stack, not ML.
+
+[x] Keep: core-10, gap-dir, regime enforce, 90min window, meta/pf shadow
+[ ] Log daily: watchlist size, signals, fills, meta_prob, would-block PF gate
+[ ] Success gate: ≥30 closed sim trades; sim PF within ~0.15 of backtest; no systematic screener failures
+
+Phase 1 — Data & execution realism (1–2 weeks, highest ROI)
+#	Action	How	Pass criterion
+[x] 1
+SIP A/B
+backtest.py --feed sip vs iex, same 2025–2026 core-10 run
+Document PF delta; if SIP PF < 1.0, edge is suspect
+[x] 2
+Slippage stress
+Re-run OOS window with --spread-bps higher + 0.10–0.15% effective slip
+PF still ≥ 1.0? If not, size down or tighten entries
+[x] 3
+Backtest RVOL parity
+backtest.py --gap-days-only --premarket-rvol (07:00 ET cutoff, extended 5m bars)
+Backtest trade count ≈ live sim frequency
+[x] 4
+Meta model for shadow
+config → meta_label_core10_oos.pkl
+Log only; no enforce
+
+Phase 2 — ORB signal quality (2–4 weeks, same data)
+Implement and A/B each on 2023–2026 + 2025–2026 OOS:
+
+#	Filter	Implementation sketch
+[x] 5
+HV breakout candle
+min_breakout_rvol: 1.75 promoted (SIP sweep; plan suggested 2.0–3.0)
+[ ] 6
+OR width band
+Built + CLI; rejected in backtest (min/max width left at 0.0)
+[ ] 7
+Lid consolidation (optional)
+After OR forms, require N bars with stdev(close) < threshold before break counts
+Only promote filters that improve OOS PF without collapsing trade count below ~80 over 17 months.
+
+Phase 3 — ML rebuild (only if Phase 0–2 hold)
+#	Action
+[ ] 8
+Replace win/loss labels with triple-barrier (upper/lower = vol multiples, vertical = 90min or EOD)
+[ ] 9
+Purge + embargo in train_meta_model.py (extend existing purged CV)
+[ ] 10
+Features you can actually get: 09:25 pre-market RVOL, prior-day approx VPOC from 5m volume, cross-asset (BTC return for COIN/MSTR)
+[ ] 11
+Re-train; require holdout AUC ≥ 0.55 before shadow→enforce trial
+Skip: dollar bars, CUSUM, HMM-grouped CV until simpler fixes fail.
+
+Phase 4 — Regime diversification (after sim validates ORB)
+#	Action
+[ ] 12
+Prototype 80% VA rule on balanced regime days only; backtest in isolation
+[ ] 13
+Prototype FAR at prior day high/VAH failures; backtest in isolation
+[ ] 14
+Router: ORB on trend, VA/FAR on balanced; never run all unconditionally
+Do not enable until each strategy shows OOS PF > 1.05 alone.
+
+Phase 5 — Live promotion (only after Phases 0–2)
+#	Action
+[ ] 15
+feed: sip in production config
+[ ] 16
+Switch to Alpaca paper orders (simulation_mode: false, paper URL) — compare to VirtualBroker
+[ ] 17
+Stop-limit entries with collar (you have entry_collar_bps)
+[ ] 18
+Consider VPS only if latency/slippage measurably hurts fills

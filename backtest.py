@@ -27,6 +27,11 @@ if SRC.exists() and str(SRC) not in sys.path:
 
 from daytrader.backtest.data_store import BarStore  # noqa: E402
 from daytrader.backtest.engine import BacktestEngine, gap_eligible_days  # noqa: E402
+from daytrader.backtest.screener_parity import (  # noqa: E402
+    intersect_eligible_days,
+    parse_cutoff_time,
+    premarket_rvol_eligible_days,
+)
 from daytrader.backtest.labels import export_labels, signals_to_frame  # noqa: E402
 from daytrader.backtest.metrics import (  # noqa: E402
     compute_metrics,
@@ -101,6 +106,22 @@ def parse_args() -> argparse.Namespace:
                         help="override data.feed for this run (Phase 3 SIP A/B)")
     parser.add_argument("--walk-forward", action="store_true")
     parser.add_argument("--gap-days-only", action="store_true")
+    parser.add_argument(
+        "--premarket-rvol",
+        action="store_true",
+        help="require premarket RVOL >= screener threshold by cutoff (default 07:00 ET)",
+    )
+    parser.add_argument(
+        "--min-premarket-rvol",
+        type=float,
+        default=None,
+        help="override research.filters.min_relative_volume for --premarket-rvol",
+    )
+    parser.add_argument(
+        "--premarket-cutoff",
+        default=None,
+        help="ET HH:MM to measure cumulative premarket volume (default: schedule or 07:00)",
+    )
     parser.add_argument("--min-gap-pct", type=float, default=None)
     parser.add_argument("--max-gap-pct", type=float, default=None,
                         help="reject exhaustion gaps above this |gap| %% (default: config or off)")
@@ -299,6 +320,23 @@ def main() -> None:
         total = sum(len(v) for v in eligible_days.values())
         print(f"gap-days-only: |gap|>={min_gap:.1f}% max_gap={max_gap_pct or 'off'} "
               f"max_norm={max_gap_norm or 'off'} -> {total} eligible symbol-days")
+
+    if args.premarket_rvol:
+        min_rvol = args.min_premarket_rvol or settings.research.filters.min_relative_volume
+        cutoff_str = args.premarket_cutoff or settings.schedule.premarket_research
+        cutoff = parse_cutoff_time(cutoff_str)
+        pm_eligible = {
+            s: premarket_rvol_eligible_days(raw_5m.get(s), raw_day.get(s), min_rvol, cutoff)
+            for s in symbols if s in raw_day
+        }
+        prev_total = sum(len(v) for v in eligible_days.values()) if eligible_days else None
+        eligible_days = intersect_eligible_days(eligible_days, pm_eligible, symbols)
+        after = sum(len(v) for v in eligible_days.values())
+        extra = f" (was {prev_total} before RVOL gate)" if prev_total is not None else ""
+        print(
+            f"premarket-rvol: >= {min_rvol:.2f}x by {cutoff_str} ET "
+            f"(extended 5m bars) -> {after} eligible symbol-days{extra}"
+        )
 
     blocked = blocked_trading_days(
         start.date(), end.date(), settings.strategies.vol_gate,
