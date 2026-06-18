@@ -51,19 +51,34 @@ def test_premarket_volume_sums_extended_hours_before_cutoff():
     assert vols[day] != 1_999_999  # RTH bar excluded
 
 
-def test_premarket_rvol_eligible_days_matches_screener_baseline():
+def test_premarket_rvol_tod_mode():
+    daily = _daily(
+        ["2026-05-30", "2026-06-02", "2026-06-03", "2026-06-04"],
+        [1_000_000, 1_000_000, 1_000_000, 1_000_000],
+    )
+    pm = pd.concat([
+        _pm_bars("2026-06-02", [("06:00", 500_000), ("06:45", 500_000)]),
+        _pm_bars("2026-06-03", [("06:00", 500_000), ("06:45", 500_000)]),
+        _pm_bars("2026-06-04", [("06:00", 900_000), ("06:45", 900_000)]),
+    ]).sort_index()
+    eligible = premarket_rvol_eligible_days(daily, pm, min_rvol=1.5, cutoff=dt.time(7, 0), mode="tod")
+    assert pd.Timestamp("2026-06-04", tz="UTC") in eligible
+    assert pd.Timestamp("2026-06-03", tz="UTC") not in eligible
+
+
+def test_premarket_rvol_screener_mode_uses_full_day_avg():
     daily = _daily(
         ["2026-05-30", "2026-06-02", "2026-06-03"],
-        [1_000_000, 1_000_000, 1_000_000],
+        [1_000_000, 1_000_000, 2_000_000],
     )
-    # 1.5M premarket on 2026-06-02 -> RVOL 1.5; 2026-06-03 only 1.0M -> fail at 1.5
     pm = pd.concat([
         _pm_bars("2026-06-02", [("06:00", 750_000), ("06:45", 750_000)]),
-        _pm_bars("2026-06-03", [("06:00", 500_000), ("06:45", 500_000)]),
+        _pm_bars("2026-06-03", [("06:00", 1_500_000), ("06:45", 1_500_000)]),
     ]).sort_index()
-    eligible = premarket_rvol_eligible_days(daily, pm, min_rvol=1.5, cutoff=dt.time(7, 0))
-    assert pd.Timestamp("2026-06-02", tz="UTC") in eligible
-    assert pd.Timestamp("2026-06-03", tz="UTC") not in eligible
+    eligible = premarket_rvol_eligible_days(
+        daily, pm, min_rvol=1.5, cutoff=dt.time(7, 0), mode="screener"
+    )
+    assert pd.Timestamp("2026-06-03", tz="UTC") in eligible  # 3M / 1M avg daily
 
 
 def test_intersect_eligible_days():

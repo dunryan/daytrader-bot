@@ -59,28 +59,45 @@ def premarket_rvol_eligible_days(
     min_rvol: float,
     cutoff: dt.time = dt.time(7, 0),
     lookback: int = 20,
+    mode: str = "tod",
 ) -> set[pd.Timestamp]:
     """Session dates whose premarket RVOL meets the screener threshold.
 
-    RVOL = cumulative premarket volume through ``cutoff`` / mean(prior ``lookback``
-    full-session daily volumes). Same baseline as ``research.screener.compute_metrics``.
+    ``mode='tod'`` (default): premarket volume through ``cutoff`` divided by the
+    mean premarket volume at the same cutoff over prior ``lookback`` sessions.
+    This is the scale that matches actionable gap-day screens (~1.5x).
+
+    ``mode='screener'``: ``premarket_vol / mean(prior full daily volumes)`` —
+    the literal ``research.screener.compute_metrics`` ratio at 07:00. With
+    ``min_relative_volume`` 1.5 this almost never passes before the open
+    (premarket is a small fraction of a full session).
     """
     if daily is None or len(daily) < 2 or min_rvol <= 0:
         return set()
 
-    pm_vols = premarket_volume_by_day(intraday_raw, cutoff) if intraday_raw is not None else {}
+    pm_by_day = premarket_volume_by_day(intraday_raw, cutoff) if intraday_raw is not None else {}
     d = daily.sort_index()
     days = pd.Index(d.index).normalize()
     eligible: set[pd.Timestamp] = set()
 
     for i in range(1, len(d)):
         day = days[i]
-        prior = d.iloc[max(0, i - lookback) : i]
-        avg_vol = float(prior["volume"].mean()) if not prior.empty else 0.0
-        if avg_vol <= 0:
+        pm_vol = pm_by_day.get(day, 0.0)
+        if pm_vol <= 0:
             continue
-        pm_vol = pm_vols.get(day, 0.0)
-        if pm_vol / avg_vol >= min_rvol:
+
+        prior = d.iloc[max(0, i - lookback) : i]
+        if mode == "screener":
+            avg = float(prior["volume"].mean()) if not prior.empty else 0.0
+            rvol = pm_vol / avg if avg > 0 else 0.0
+        else:
+            prior_days = days[max(0, i - lookback) : i]
+            samples = [pm_by_day.get(pd.Timestamp(d.date(), tz="UTC"), 0.0) for d in prior_days]
+            samples = [v for v in samples if v > 0]
+            avg_pm = sum(samples) / len(samples) if samples else 0.0
+            rvol = pm_vol / avg_pm if avg_pm > 0 else 0.0
+
+        if rvol >= min_rvol:
             eligible.add(day)
 
     return eligible

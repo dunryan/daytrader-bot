@@ -122,6 +122,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="ET HH:MM to measure cumulative premarket volume (default: schedule or 07:00)",
     )
+    parser.add_argument(
+        "--premarket-rvol-mode",
+        choices=("tod", "screener"),
+        default="tod",
+        help="tod = premarket vs avg premarket at cutoff (default); screener = vs full daily avg",
+    )
     parser.add_argument("--min-gap-pct", type=float, default=None)
     parser.add_argument("--max-gap-pct", type=float, default=None,
                         help="reject exhaustion gaps above this |gap| %% (default: config or off)")
@@ -326,7 +332,9 @@ def main() -> None:
         cutoff_str = args.premarket_cutoff or settings.schedule.premarket_research
         cutoff = parse_cutoff_time(cutoff_str)
         pm_eligible = {
-            s: premarket_rvol_eligible_days(raw_5m.get(s), raw_day.get(s), min_rvol, cutoff)
+            s: premarket_rvol_eligible_days(
+                raw_day.get(s), raw_5m.get(s), min_rvol, cutoff, mode=args.premarket_rvol_mode
+            )
             for s in symbols if s in raw_day
         }
         prev_total = sum(len(v) for v in eligible_days.values()) if eligible_days else None
@@ -334,7 +342,7 @@ def main() -> None:
         after = sum(len(v) for v in eligible_days.values())
         extra = f" (was {prev_total} before RVOL gate)" if prev_total is not None else ""
         print(
-            f"premarket-rvol: >= {min_rvol:.2f}x by {cutoff_str} ET "
+            f"premarket-rvol ({args.premarket_rvol_mode}): >= {min_rvol:.2f}x by {cutoff_str} ET "
             f"(extended 5m bars) -> {after} eligible symbol-days{extra}"
         )
 
