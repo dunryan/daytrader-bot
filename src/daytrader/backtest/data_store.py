@@ -63,12 +63,15 @@ class BarStore:
 
         if to_fetch:
             logger.info(
-                "Fetching %d symbol(s) of %s bars %s -> %s",
+                "Fetching %d symbol(s) of %s bars %s -> %s (one symbol per request)",
                 len(to_fetch), timeframe.value, start.date(), end.date(),
             )
-            fetched = provider.get_bars(to_fetch, timeframe, start=start, end=end)
-            for symbol, df in fetched.items():
+            for symbol in to_fetch:
+                logger.info("  fetching %s ...", symbol)
+                fetched = provider.get_bars([symbol], timeframe, start=start, end=end)
+                df = fetched.get(symbol)
                 if df is None or df.empty:
+                    logger.warning("No bars returned for %s", symbol)
                     continue
                 try:
                     df.to_parquet(self._path(symbol, timeframe, feed))
