@@ -24,7 +24,7 @@ research:
   universe: ["COIN", "SMCI", "PLTR", "TSLA", "AMD", "MU", "NVDA", "AVGO", "MSTR", "META"]
   max_watchlist_size: 10
   filters:
-    min_avg_daily_volume: 1000000  # liquidity floor (shares)
+    min_avg_daily_volume: 250000   # liquidity floor (shares); IEX-scaled (~1M SIP backtest floor)
     min_price: 5.0
     max_price: 1000.0
     min_gap_percent: 2.0           # |gap| threshold to qualify
