@@ -26,7 +26,7 @@ research:
   filters:
     min_avg_daily_volume: 250000   # liquidity floor (shares); IEX-scaled (~1M SIP backtest floor)
     min_price: 5.0
-    max_price: 1000.0
+    max_price: 2000.0              # was 1000; MU ~1134+ (Jun 2026)
     min_gap_percent: 2.0           # |gap| threshold to qualify
     min_relative_volume: 1.5       # RVOL threshold
   sentiment:
