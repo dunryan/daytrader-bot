@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
-"""Sweep ORB min_breakout_rvol on a fixed window (clean + slippage stress).
+"""Sweep screener min_relative_volume (TOD premarket RVOL @ 07:00 ET).
 
-Loads bar data once, replays each RVOL threshold twice, prints a ranked table.
-Use to pick a sweet spot without over-fitting a large parameter grid.
+Intersects gap-day eligibility with premarket RVOL (live screener parity), then
+replays ORB with a fixed min_breakout_rvol. Clean + slippage stress per row.
 
 Example:
-    python scripts/sweep_orb_rvol.py \\
+    python scripts/sweep_screener_rvol.py \\
         --symbols COIN,SMCI,PLTR,TSLA,AMD,MU,NVDA,AVGO,MSTR,META \\
         --start 2025-01-02 --end 2026-06-05 \\
         --feed sip --cache-dir data/backtest_cache_sip
-
-PowerShell one-liner (no script):
-    foreach ($r in 1.5,1.6,1.75,1.85,2.0) {
-        Write-Host "=== RVOL $r ==="
-        .\\.venv\\Scripts\\python.exe backtest.py ... --orb-min-breakout-rvol $r 2>&1 |
-            Select-String "trades=|PF="
-    }
 """
 
 from __future__ import annotations
@@ -37,10 +30,15 @@ if SRC.exists() and str(SRC) not in sys.path:
 from daytrader.backtest.data_store import BarStore  # noqa: E402
 from daytrader.backtest.engine import BacktestEngine, gap_eligible_days  # noqa: E402
 from daytrader.backtest.metrics import compute_metrics  # noqa: E402
+from daytrader.backtest.screener_parity import (  # noqa: E402
+    intersect_eligible_days,
+    premarket_rvol_eligible_days,
+)
 from daytrader.config.settings import get_settings  # noqa: E402
 from daytrader.data.data_engine import DataEngine  # noqa: E402
 from daytrader.data.providers import get_provider  # noqa: E402
 from daytrader.data.providers.base import Timeframe  # noqa: E402
+from daytrader.research.premarket_rvol import parse_cutoff_time  # noqa: E402
 from daytrader.strategy.router import build_strategies  # noqa: E402
 from daytrader.strategy.vol_gate import blocked_trading_days  # noqa: E402
 from daytrader.utils.logging_setup import setup_logging  # noqa: E402
@@ -48,7 +46,8 @@ from daytrader.utils.logging_setup import setup_logging  # noqa: E402
 
 @dataclass
 class SweepRow:
-    rvol: float
+    min_rvol: float
+    eligible_days: int
     trades: int
     pf_clean: float | None
     exp_clean: float | None
@@ -57,12 +56,18 @@ class SweepRow:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Sweep ORB min_breakout_rvol")
+    p = argparse.ArgumentParser(description="Sweep screener min_relative_volume (TOD premarket RVOL)")
     p.add_argument("--symbols", required=True, help="comma-separated symbols")
     p.add_argument("--start", required=True)
     p.add_argument("--end", required=True)
-    p.add_argument("--rvol", default="1.5,1.6,1.75,1.85,2.0",
-                   help="comma-separated min_breakout_rvol values")
+    p.add_argument(
+        "--rvol",
+        default="1.25,1.35,1.4,1.5,1.6,1.75",
+        help="comma-separated min_relative_volume values",
+    )
+    p.add_argument("--premarket-cutoff", default="07:00", help="TOD RVOL cutoff (ET, HH:MM)")
+    p.add_argument("--orb-min-breakout-rvol", type=float, default=1.75,
+                   help="fixed ORB breakout RVOL while sweeping screener threshold")
     p.add_argument("--orb-entry-window", type=int, default=90)
     p.add_argument("--feed", choices=("iex", "sip"), default="sip")
     p.add_argument("--cache-dir", default="data/backtest_cache_sip")
@@ -70,9 +75,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--atr-impact-clean", type=float, default=0.05)
     p.add_argument("--spread-bps-stress", type=float, default=8.0)
     p.add_argument("--atr-impact-stress", type=float, default=0.10)
-    p.add_argument("--min-trades", type=int, default=80,
-                   help="minimum trades for ranking (avoid tiny samples)")
-    p.add_argument("--min-pf-clean", type=float, default=1.10,
+    p.add_argument("--min-trades", type=int, default=60,
+                   help="minimum trades for ranking (screener sweep is sparser than ORB-only)")
+    p.add_argument("--min-pf-clean", type=float, default=1.05,
                    help="minimum clean PF to rank a row")
     return p.parse_args()
 
@@ -85,7 +90,6 @@ def _run_once(
     blocked,
     spread_bps: float,
     atr_impact: float,
-    min_breakout_rvol: float,
 ) -> dict:
     s = copy.deepcopy(settings)
     s.ml.meta_filter.mode = "off"
@@ -95,8 +99,6 @@ def _run_once(
     s.strategies.opening_range_breakout.enabled = True
     s.strategies.vwap_pullback.enabled = False
     s.strategies.momentum_scalp.enabled = False
-    s.strategies.opening_range_breakout.min_breakout_rvol = min_breakout_rvol
-    s.strategies.opening_range_breakout.max_entry_minutes_after_open = settings.strategies.opening_range_breakout.max_entry_minutes_after_open
 
     strategies = build_strategies(s)
     engine = BacktestEngine(
@@ -126,6 +128,7 @@ def main() -> None:
 
     settings.data.feed = args.feed
     settings.strategies.opening_range_breakout.max_entry_minutes_after_open = args.orb_entry_window
+    settings.strategies.opening_range_breakout.min_breakout_rvol = args.orb_min_breakout_rvol
 
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     rvols = [float(x.strip()) for x in args.rvol.split(",") if x.strip()]
@@ -133,6 +136,7 @@ def main() -> None:
     end = dt.datetime.fromisoformat(args.end).replace(
         hour=23, minute=59, tzinfo=dt.timezone.utc
     )
+    cutoff = parse_cutoff_time(args.premarket_cutoff)
 
     orb = settings.strategies.opening_range_breakout
     max_gap_norm = float(getattr(orb, "max_gap_norm", 0) or 0)
@@ -161,30 +165,41 @@ def main() -> None:
     if spy_daily is not None and "SPY" not in daily:
         spy_daily = data_engine.enrich(spy_daily, Timeframe.DAY)
 
-    eligible_days = {
+    gap_days = {
         s: gap_eligible_days(
             raw_day.get(s), min_gap, max_gap_pct=max_gap_pct, max_gap_norm=max_gap_norm
         )
         for s in symbols if s in raw_day
     }
+    gap_total = sum(len(v) for v in gap_days.values())
     blocked = blocked_trading_days(
         start.date(), end.date(), settings.strategies.vol_gate,
         vix_daily=vix_day, spy_daily=spy_daily,
     )
 
     rows: list[SweepRow] = []
-    for rvol in rvols:
-        print(f"  RVOL {rvol:.2f} ...", flush=True)
+    for min_rvol in rvols:
+        print(f"  screener RVOL {min_rvol:.2f} ...", flush=True)
+        pm_eligible = {
+            s: premarket_rvol_eligible_days(
+                raw_day.get(s), raw_5m.get(s), min_rvol, cutoff, mode="tod"
+            )
+            for s in symbols if s in raw_day
+        }
+        eligible_days = intersect_eligible_days(gap_days, pm_eligible, symbols)
+        eligible_count = sum(len(v) for v in eligible_days.values())
+
         clean = _run_once(
             settings, intraday, daily, eligible_days, blocked,
-            args.spread_bps_clean, args.atr_impact_clean, rvol,
+            args.spread_bps_clean, args.atr_impact_clean,
         )
         stress = _run_once(
             settings, intraday, daily, eligible_days, blocked,
-            args.spread_bps_stress, args.atr_impact_stress, rvol,
+            args.spread_bps_stress, args.atr_impact_stress,
         )
         rows.append(SweepRow(
-            rvol=rvol,
+            min_rvol=min_rvol,
+            eligible_days=eligible_count,
             trades=int(clean["total_trades"]),
             pf_clean=clean.get("profit_factor"),
             exp_clean=clean.get("expectancy"),
@@ -193,19 +208,26 @@ def main() -> None:
         ))
 
     print()
-    print("=" * 78)
-    print(f"ORB min_breakout_rvol sweep  |  {args.start} -> {args.end}  |  feed={feed}")
+    print("=" * 88)
+    print(
+        f"Screener min_relative_volume sweep (TOD @ {args.premarket_cutoff} ET)  |  "
+        f"{args.start} -> {args.end}  |  feed={feed}"
+    )
+    print(f"gap-days: {gap_total} symbol-days  |  ORB min_breakout_rvol fixed at {args.orb_min_breakout_rvol}")
     print(f"clean: spread={args.spread_bps_clean}bps atr_impact={args.atr_impact_clean}")
     print(f"stress: spread={args.spread_bps_stress}bps atr_impact={args.atr_impact_stress}")
-    print("=" * 78)
-    header = f"{'RVOL':>6}  {'trades':>6}  {'PF_clean':>8}  {'exp_clean':>10}  {'PF_stress':>9}  {'exp_stress':>10}"
+    print("=" * 88)
+    header = (
+        f"{'RVOL':>6}  {'sym-days':>8}  {'trades':>6}  {'PF_clean':>8}  {'exp_clean':>10}  "
+        f"{'PF_stress':>9}  {'exp_stress':>10}"
+    )
     print(header)
     print("-" * len(header))
     for row in rows:
         print(
-            f"{row.rvol:>6.2f}  {row.trades:>6}  {_fmt_pf(row.pf_clean):>8}  "
-            f"{_fmt_exp(row.exp_clean):>10}  {_fmt_pf(row.pf_stress):>9}  "
-            f"{_fmt_exp(row.exp_stress):>10}"
+            f"{row.min_rvol:>6.2f}  {row.eligible_days:>8}  {row.trades:>6}  "
+            f"{_fmt_pf(row.pf_clean):>8}  {_fmt_exp(row.exp_clean):>10}  "
+            f"{_fmt_pf(row.pf_stress):>9}  {_fmt_exp(row.exp_stress):>10}"
         )
 
     eligible = [
@@ -222,9 +244,12 @@ def main() -> None:
         print()
         print(
             f"Recommended (max PF_stress, PF_clean>={args.min_pf_clean}, trades>={args.min_trades}): "
-            f"min_breakout_rvol={best.rvol:.2f}"
+            f"min_relative_volume={best.min_rvol:.2f}"
         )
-        print(f"  clean  PF={_fmt_pf(best.pf_clean)}  exp={_fmt_exp(best.exp_clean)}  trades={best.trades}")
+        print(
+            f"  sym-days={best.eligible_days}  clean PF={_fmt_pf(best.pf_clean)}  "
+            f"exp={_fmt_exp(best.exp_clean)}  trades={best.trades}"
+        )
         print(f"  stress PF={_fmt_pf(best.pf_stress)}  exp={_fmt_exp(best.exp_stress)}")
     else:
         print()

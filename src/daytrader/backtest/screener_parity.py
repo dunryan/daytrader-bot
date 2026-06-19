@@ -9,7 +9,6 @@ import pandas as pd
 from daytrader.research.premarket_rvol import (
     parse_cutoff_time,
     premarket_volume_by_day,
-    tod_premarket_rvol,
 )
 
 __all__ = [
@@ -40,7 +39,17 @@ def premarket_rvol_eligible_days(
     for i in range(1, len(d)):
         day = days[i]
         if mode == "tod":
-            rvol = tod_premarket_rvol(intraday_raw, day, cutoff, lookback) if intraday_raw is not None else None
+            if not pm_by_day:
+                continue
+            day_key = pd.Timestamp(day.date(), tz="UTC")
+            today_vol = pm_by_day.get(day_key, 0.0)
+            if today_vol <= 0:
+                continue
+            prior_vols = [v for k, v in sorted(pm_by_day.items()) if k < day_key and v > 0][-lookback:]
+            if not prior_vols:
+                continue
+            avg_pm = sum(prior_vols) / len(prior_vols)
+            rvol = today_vol / avg_pm if avg_pm > 0 else None
         else:
             pm_vol = pm_by_day.get(day, 0.0)
             if pm_vol <= 0:

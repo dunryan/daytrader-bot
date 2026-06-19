@@ -28,7 +28,7 @@ research:
     min_price: 5.0
     max_price: 2000.0              # was 1000; MU ~1134+ (Jun 2026)
     min_gap_percent: 2.0           # |gap| threshold to qualify
-    min_relative_volume: 1.5       # RVOL threshold
+    min_relative_volume: 1.35      # TOD premarket RVOL; SIP sweep 1.35-1.40 beat 1.5 (was 1.5)
   sentiment:
     enabled: true
     provider: "finnhub"            # finnhub | newsapi | none
