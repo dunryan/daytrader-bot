@@ -65,7 +65,25 @@ git pull
 source .venv/bin/activate
 pip install -r requirements.txt
 pip install -e .
+python scripts/check_db.py          # integrity + sklearn + meta model
 sudo systemctl restart daytrader
+```
+
+If `check_db.py` reports corruption, stop the service first:
+
+```bash
+sudo systemctl stop daytrader
+python scripts/check_db.py --backup --vacuum
+# if still failing, dump/restore — see script output
+sudo systemctl start daytrader
+```
+
+Verify meta-label shadow loads (needs scikit-learn + OOS model):
+
+```bash
+python -c "import sklearn; from pathlib import Path; print('sklearn ok')"
+ls -la data/models/meta_label_core10_oos.pkl
+grep model_path config/config.yaml
 ```
 
 ## Troubleshooting
@@ -73,7 +91,10 @@ sudo systemctl restart daytrader
 | Symptom | Check |
 |---------|--------|
 | Service fails immediately | `journalctl -u daytrader -n 50` |
-| No watchlist | Alpaca keys in `.env`; `python main.py --once research` |
+| No watchlist | Alpaca keys in `.env`; `python main.py --once research`; grep `SCREENER` in logs |
+| Empty watchlist every day | Fixed in TOD RVOL screener — `git pull`; re-run research |
+| `database disk image is malformed` | `sudo systemctl stop daytrader`; `python scripts/check_db.py` |
+| Meta filter inert | `pip install scikit-learn`; confirm `meta_label_core10_oos.pkl` exists |
 | Permission errors | Service `User` must own `data/`, `logs/`, `.env` |
 | Wrong schedule times | `config/config.yaml` → `app.timezone: America/New_York` |
 

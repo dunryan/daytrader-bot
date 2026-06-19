@@ -48,11 +48,8 @@ python backtest.py \
   --feed sip --cache-dir data/backtest_cache_sip
 ```
 
-> **Note:** `--premarket-rvol-mode screener` uses the literal live formula
-> (`premarket_vol / avg full daily vol`). At 07:00 that ratio is ~0.01–0.3× for
-> core-10 names, so **nothing passes** at `min_relative_volume: 1.5`. The live
-> screener likely needs the same TOD fix — follow-up item. Use `tod` mode for
-> backtest frequency checks.
+> **Live screener (fixed):** uses the same TOD-normalized premarket RVOL as backtest
+> `tod` mode — premarket vol @ 07:00 vs trailing avg premarket vol, not vs full daily avg.
 
 ### Measured (SIP, 2025-01-02 → 2026-06-05)
 

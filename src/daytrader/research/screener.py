@@ -2,6 +2,10 @@
 
 The metric math and filter predicate are pure functions (no I/O) so they are
 trivially unit-testable. :class:`Screener` wires them to a market-data provider.
+
+Premarket RVOL uses time-of-day normalization: cumulative volume through the
+research cutoff (default 07:00 ET) vs the trailing average of prior sessions'
+premarket volume at the same cutoff — matching backtest ``--premarket-rvol-mode tod``.
 """
 
 from __future__ import annotations
@@ -13,21 +17,14 @@ import pandas as pd
 from daytrader.config.settings import ResearchFilters
 from daytrader.data.providers.base import MarketDataProvider, Timeframe
 from daytrader.research.models import TickerMetrics
+from daytrader.research.premarket_rvol import parse_cutoff_time, tod_premarket_rvol
 from daytrader.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)
 
 
 def compute_metrics(symbol: str, daily: pd.DataFrame, lookback: int = 20) -> TickerMetrics | None:
-    """Compute pre-market metrics from a symbol's daily OHLCV frame.
-
-    The most recent row is treated as "today" (possibly a partial pre-market
-    bar); the prior row is the previous session's close. Average daily volume
-    is the mean of the ``lookback`` sessions *before* today, so today's partial
-    volume never contaminates the baseline.
-
-    Returns ``None`` when there is insufficient history to compute a gap.
-    """
+    """Compute pre-market metrics from a symbol's daily OHLCV frame."""
     if daily is None or len(daily) < 2:
         return None
 
@@ -61,12 +58,25 @@ def compute_metrics(symbol: str, daily: pd.DataFrame, lookback: int = 20) -> Tic
     )
 
 
-def passes_filters(metrics: TickerMetrics, filters: ResearchFilters) -> tuple[bool, list[str]]:
-    """Apply liquidity / price / gap / RVOL filters.
+def apply_tod_premarket_rvol(
+    metrics: TickerMetrics,
+    daily: pd.DataFrame,
+    intraday_5m: pd.DataFrame | None,
+    cutoff: dt.time,
+    lookback: int = 20,
+) -> TickerMetrics:
+    """Replace ``relative_volume`` with TOD-normalized premarket RVOL when 5m data exists."""
+    if intraday_5m is None or intraday_5m.empty:
+        return metrics
+    session_day = pd.Index(daily.sort_index().index).normalize()[-1]
+    tod = tod_premarket_rvol(intraday_5m, session_day, cutoff, lookback)
+    if tod is not None:
+        metrics.relative_volume = tod
+    return metrics
 
-    Returns ``(passed, reasons)`` where ``reasons`` describes the qualifying
-    characteristics when passed, or the failing criterion when not.
-    """
+
+def passes_filters(metrics: TickerMetrics, filters: ResearchFilters) -> tuple[bool, list[str]]:
+    """Apply liquidity / price / gap / RVOL filters."""
     price = metrics.last_close
     if not (filters.min_price <= price <= filters.max_price):
         return False, [f"price {price:.2f} outside [{filters.min_price}, {filters.max_price}]"]
@@ -80,23 +90,35 @@ def passes_filters(metrics: TickerMetrics, filters: ResearchFilters) -> tuple[bo
         return False, [f"gap {metrics.gap_percent:+.2f}% < {filters.min_gap_percent}%"]
 
     if metrics.relative_volume < filters.min_relative_volume:
-        return False, [f"RVOL {metrics.relative_volume:.2f} < {filters.min_relative_volume}"]
+        return False, [
+            f"TOD RVOL {metrics.relative_volume:.2f}x < {filters.min_relative_volume}x"
+        ]
 
     direction = "up" if metrics.gap_percent >= 0 else "down"
     reasons = [
         f"gap-{direction} {metrics.gap_percent:+.2f}%",
-        f"RVOL {metrics.relative_volume:.2f}x",
+        f"TOD RVOL {metrics.relative_volume:.2f}x",
         f"avg vol {metrics.avg_daily_volume / 1e6:.1f}M",
     ]
     return True, reasons
 
 
 class Screener:
-    """Fetches daily bars and screens a universe for tradeable candidates."""
+    """Fetches daily + 5m bars and screens a universe for tradeable candidates."""
 
-    def __init__(self, provider: MarketDataProvider, filters: ResearchFilters) -> None:
+    def __init__(
+        self,
+        provider: MarketDataProvider,
+        filters: ResearchFilters,
+        premarket_cutoff: dt.time | str = dt.time(7, 0),
+        lookback: int = 20,
+    ) -> None:
         self.provider = provider
         self.filters = filters
+        self.premarket_cutoff = (
+            parse_cutoff_time(premarket_cutoff) if isinstance(premarket_cutoff, str) else premarket_cutoff
+        )
+        self.lookback = lookback
 
     def screen(
         self,
@@ -105,26 +127,39 @@ class Screener:
         history_days: int = 40,
         batch_size: int = 100,
     ) -> tuple[list[TickerMetrics], list[TickerMetrics]]:
-        """Screen ``symbols``.
-
-        Returns ``(passed, all_metrics)``: candidates that cleared the filters,
-        and every symbol's metrics (for the scan audit log).
-        """
+        """Screen ``symbols``; returns ``(passed, all_metrics)``."""
         as_of = as_of or dt.datetime.now(dt.timezone.utc)
         start = as_of - dt.timedelta(days=history_days)
 
         all_metrics: list[TickerMetrics] = []
         for i in range(0, len(symbols), batch_size):
             batch = symbols[i : i + batch_size]
-            bars = self.provider.get_bars(batch, Timeframe.DAY, start=start, end=as_of)
+            daily_bars = self.provider.get_bars(batch, Timeframe.DAY, start=start, end=as_of)
+            intraday_bars = self.provider.get_bars(batch, Timeframe.MIN_5, start=start, end=as_of)
             for sym in batch:
-                df = bars.get(sym)
+                df = daily_bars.get(sym)
                 if df is None:
                     continue
                 metrics = compute_metrics(sym, df)
-                if metrics is not None:
-                    all_metrics.append(metrics)
+                if metrics is None:
+                    continue
+                metrics = apply_tod_premarket_rvol(
+                    metrics, df, intraday_bars.get(sym), self.premarket_cutoff, self.lookback
+                )
+                all_metrics.append(metrics)
 
-        passed = [m for m in all_metrics if passes_filters(m, self.filters)[0]]
-        logger.info("Screened %d symbols -> %d passed filters", len(all_metrics), len(passed))
+        passed: list[TickerMetrics] = []
+        for m in all_metrics:
+            ok, reasons = passes_filters(m, self.filters)
+            if ok:
+                passed.append(m)
+                logger.info("SCREENER PASS %s: %s", m.symbol, "; ".join(reasons))
+            else:
+                logger.info("SCREENER REJECT %s: %s", m.symbol, reasons[0])
+
+        logger.info(
+            "Screened %d symbols -> %d passed filters (TOD RVOL by %s ET)",
+            len(all_metrics), len(passed),
+            self.premarket_cutoff.strftime("%H:%M"),
+        )
         return passed, all_metrics

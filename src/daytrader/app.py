@@ -113,9 +113,10 @@ class Application:
         try:
             symbols = self.research.watchlist_repo.symbols_for_day(now.date().isoformat())
             if not symbols:
-                logger.debug("No watchlist symbols for %s", now.date())
+                logger.info("No watchlist for %s — skipping trading cycle", now.date())
                 return
 
+            logger.info("Trading cycle: evaluating %d watchlist symbol(s)", len(symbols))
             snapshots = self.data_engine.build_snapshots(symbols, self.cycle_timeframes, as_of=now)
             prices = {
                 sym: snap.latest_price()
@@ -133,8 +134,13 @@ class Application:
                 return
 
             signals = self.router.evaluate(snapshots, trade_date=now.date())
-            self.execution.process_signals(signals, prices)
-            self.execution.manage_positions(prices)
+            opened = self.execution.process_signals(signals, prices)
+            closed = self.execution.manage_positions(prices)
+            if signals or opened or closed:
+                logger.info(
+                    "Cycle result: signals=%d opened=%d closed=%d open=%d",
+                    len(signals), len(opened), len(closed), len(self.execution.open_positions),
+                )
         except Exception:  # noqa: BLE001
             logger.exception("Trading cycle failed")
 

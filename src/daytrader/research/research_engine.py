@@ -43,7 +43,11 @@ class ResearchEngine:
         self.sentiment = sentiment
         self.watchlist_repo = WatchlistRepository(db)
         self.scan_repo = ScanRepository(db)
-        self.screener = Screener(provider, settings.research.filters)
+        self.screener = Screener(
+            provider,
+            settings.research.filters,
+            premarket_cutoff=settings.schedule.premarket_research,
+        )
 
     # ── public API ─────────────────────────────────────────────
     @classmethod

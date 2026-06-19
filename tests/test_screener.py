@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from daytrader.config.settings import ResearchFilters
-from daytrader.research.screener import Screener, compute_metrics, passes_filters
+from daytrader.research.screener import (
+    Screener,
+    apply_tod_premarket_rvol,
+    compute_metrics,
+    passes_filters,
+)
 from tests.conftest import FakeProvider, make_daily_frame
 
 

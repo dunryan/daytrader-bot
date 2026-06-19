@@ -29,6 +29,15 @@ from daytrader.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)
 
+_NOTABLE_HOLD_KEYWORDS = (
+    "blocked", "RVOL", "rvol", "gap", "regime", "OR too", "no opening-range",
+)
+
+
+def _notable_hold(rationale: str) -> bool:
+    text = rationale.lower()
+    return any(k.lower() in text for k in _NOTABLE_HOLD_KEYWORDS)
+
 
 def build_strategies(settings: Settings) -> list[Strategy]:
     """Instantiate strategies whose config toggle is enabled."""
@@ -118,6 +127,13 @@ class StrategyRouter:
             try:
                 regime_enum, regime_details = classify(snapshot)
                 regime = regime_enum.value
+                logger.info(
+                    "REGIME %s: %s (range_ext=%s vwap_side=%s)",
+                    snapshot.symbol,
+                    regime,
+                    regime_details.get("range_extension", "n/a"),
+                    regime_details.get("vwap_one_sidedness", "n/a"),
+                )
             except Exception:  # noqa: BLE001
                 logger.exception("Regime classification failed for %s", snapshot.symbol)
 
@@ -125,8 +141,12 @@ class StrategyRouter:
         for strat in self.strategies:
             allowed = self._regime_allows(regime, strat.name)
             if not allowed and self.regime_config.mode == "enforce":
-                logger.debug(
-                    "%s/%s blocked by regime gate (%s)", snapshot.symbol, strat.name, regime
+                logger.info(
+                    "REGIME block %s/%s (regime=%s, allowed=%s)",
+                    snapshot.symbol,
+                    strat.name,
+                    regime,
+                    self.regime_config.allowed.get(strat.name, []),
                 )
                 continue
             try:
@@ -135,7 +155,13 @@ class StrategyRouter:
                 logger.exception("Strategy %s failed on %s", strat.name, snapshot.symbol)
                 continue
             if not sig.is_actionable:
-                logger.debug("%s/%s HOLD: %s", snapshot.symbol, strat.name, sig.rationale)
+                if _notable_hold(sig.rationale):
+                    logger.info(
+                        "STRATEGY %s/%s HOLD: %s",
+                        snapshot.symbol, strat.name, sig.rationale,
+                    )
+                else:
+                    logger.debug("%s/%s HOLD: %s", snapshot.symbol, strat.name, sig.rationale)
                 continue
             if regime is not None:
                 sig.indicators["regime"] = regime
@@ -183,5 +209,8 @@ class StrategyRouter:
                 if passed:
                     survivors.append(sig)
 
-        logger.info("Router produced %d actionable signals for %s", len(survivors), date_str)
+        logger.info(
+            "Router %s: %d watchlist symbol(s) -> %d signal(s) passed filters",
+            date_str, len(snapshots), len(survivors),
+        )
         return survivors
