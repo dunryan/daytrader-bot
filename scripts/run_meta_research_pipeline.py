@@ -10,9 +10,9 @@ Keeps live sim on core-10 + shadow mode — this is offline research only.
 
 Usage:
     python scripts/run_meta_research_pipeline.py
+    python scripts/run_meta_research_pipeline.py --data-root F:/daytrader-bot-data
     python scripts/run_meta_research_pipeline.py --skip-backtest   # retrain only
-    python scripts/run_meta_research_pipeline.py --batch-size 8
-    python scripts/run_meta_research_pipeline.py --resume-batches
+    python scripts/run_meta_research_pipeline.py --batch-size 8 --resume-batches
     python scripts/run_meta_research_pipeline.py --dry-run
 """
 
@@ -45,6 +45,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--eval-start", default="2025-01-01",
                    help="holdout-symbol AUC eval window start")
     p.add_argument("--feed", default="sip", choices=("sip", "iex"))
+    p.add_argument(
+        "--data-root",
+        default=None,
+        help="store cache/labels/model on another drive, e.g. F:/daytrader-bot-data",
+    )
     p.add_argument("--cache-dir", default="data/backtest_cache_sip")
     p.add_argument("--min-premarket-rvol", type=float, default=1.35)
     p.add_argument("--premarket-cutoff", default="07:00")
@@ -59,6 +64,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-train", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
+
+
+def apply_data_root(args: argparse.Namespace) -> None:
+    """Point cache, labels, and model paths at ``--data-root`` when set."""
+    if not args.data_root:
+        return
+    root = Path(args.data_root)
+    args.cache_dir = str(root / "backtest_cache_sip")
+    if Path(args.labels) == DEFAULT_LABELS:
+        args.labels = str(root / "backtest" / DEFAULT_LABELS.name)
+    if Path(args.model_out) == DEFAULT_MODEL:
+        args.model_out = str(root / "models" / DEFAULT_MODEL.name)
 
 
 def load_universe_symbols(path: Path, universe_set: str) -> list[str]:
@@ -178,6 +195,10 @@ def run_batched_backtest(
     if args.dry_run:
         return
 
+    in_parts = sorted(
+        p for p in batch_dir.glob(f"{labels.stem}_batch*.parquet") if "_oos" not in p.name
+    )
+    oos_parts = sorted(batch_dir.glob(f"{labels.stem}_batch*_oos.parquet"))
     n_in = merge_parquet_files(in_parts, labels)
     n_oos = merge_parquet_files(oos_parts, oos_path)
     print(f"Merged labels: {n_in} in-sample -> {labels}")
@@ -186,6 +207,7 @@ def run_batched_backtest(
 
 def main() -> int:
     args = parse_args()
+    apply_data_root(args)
     universe = Path(args.symbols_file)
     symbols = load_universe_symbols(universe, args.universe_set)
     holdout = load_holdout_symbols(universe)
@@ -201,6 +223,7 @@ def main() -> int:
     print(f"  batches:  {len(batches)} x {args.batch_size or len(symbols)} symbols")
     print(f"  window:   {args.start} -> {args.end}  train-end={args.train_end}")
     print(f"  feed:     {args.feed}  premarket RVOL>={args.min_premarket_rvol} TOD @ {args.premarket_cutoff}")
+    print(f"  cache:    {args.cache_dir}")
     print(f"  holdout:  {', '.join(holdout)} (excluded from model fit)")
     print(f"  labels:   {labels}")
     print(f"  model:    {args.model_out}")
