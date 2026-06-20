@@ -34,7 +34,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run expanded meta-label research pipeline")
     p.add_argument("--symbols-file", default=str(DEFAULT_UNIVERSE))
     p.add_argument("--universe-set", default="all", choices=("training", "holdout", "all"))
-    p.add_argument("--start", default="2021-01-04", help="backtest start (YYYY-MM-DD)")
+    p.add_argument("--start", default="2023-01-03",
+                   help="backtest start (YYYY-MM-DD); use 2021+ on a machine with ample RAM")
     p.add_argument("--end", default="2026-06-05")
     p.add_argument("--train-end", default="2024-12-31",
                    help="in-sample label cutoff; OOS labels written alongside")
